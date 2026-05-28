@@ -171,16 +171,32 @@ pick_storage TEMPLATE_STORAGE vztmpl "Template storage"
 : "${REPO_URL:=$REPO_URL_DEFAULT}"
 : "${REPO_REF:=main}"
 
-# An ID is taken if either a CT (pct) or a VM (qm) is using it — they share the namespace.
+# An ID is taken if any CT or VM in the cluster uses it.
+# /etc/pve/.vmlist is the cluster-synced list of all VMs/CTs across nodes;
+# fall back to local pct/qm checks for non-clustered hosts.
 id_taken() {
-  pct status "$1" >/dev/null 2>&1 && return 0
-  command -v qm >/dev/null && qm status "$1" >/dev/null 2>&1 && return 0
+  local id="$1"
+  if [[ -r /etc/pve/.vmlist ]] && grep -qF "\"$id\":" /etc/pve/.vmlist; then
+    return 0
+  fi
+  pct status "$id" >/dev/null 2>&1 && return 0
+  command -v qm >/dev/null && qm status "$id" >/dev/null 2>&1 && return 0
   return 1
 }
 
 if [[ -z "${CTID:-}" ]]; then
-  CTID=100
-  while id_taken "$CTID"; do CTID=$((CTID + 1)); done
+  # Prefer Proxmox's own cluster-aware nextid (returns lowest free >= 100).
+  if NEXTID="$(pvesh get /cluster/nextid 2>/dev/null)" && [[ "$NEXTID" =~ ^[0-9]+$ ]]; then
+    CTID="$NEXTID"
+  else
+    CTID=100
+    while id_taken "$CTID"; do CTID=$((CTID + 1)); done
+  fi
+fi
+
+# Final guard — if a user-supplied CTID is taken, bail with a clear error.
+if id_taken "$CTID"; then
+  die "CTID $CTID is already in use somewhere in the cluster. Pick another: CTID=… ..."
 fi
 info "Using CTID=$CTID, hostname=$CT_HOSTNAME, storage=$STORAGE"
 
