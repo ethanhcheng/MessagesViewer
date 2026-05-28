@@ -35,9 +35,10 @@ def apple_ts_to_unix(ts: Optional[int]) -> Optional[float]:
 def decode_attributed_body(blob: Optional[bytes]) -> Optional[str]:
     """Decode the typedstream-encoded `attributedBody` blob used in Ventura+.
 
-    Falls back to a naïve scan if the typedstream library is unavailable or
-    parsing fails — extracts the longest UTF-8 run, which is reliably the
-    NSString payload at the start of the archive.
+    Uses a byte-pattern scan to extract the NSString payload — works for plain
+    text messages, which is the common case. If a `typedstream` Python library
+    is present, we try it first for richer parsing; otherwise the fallback is
+    used directly.
     """
     if not blob:
         return None
