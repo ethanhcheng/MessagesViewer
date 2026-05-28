@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import db
-from .auth import SESSION_COOKIE, is_authenticated, new_session_token, require_auth, verify_password
+from .auth import SESSION_COOKIE, is_authenticated, new_session_token, require_auth, verify_credentials
 from .config import config
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -36,11 +36,15 @@ def login_page(request: Request) -> Response:
 
 
 @app.post("/login")
-def login_submit(request: Request, password: str = Form(...)) -> Response:
-    if not verify_password(password):
+def login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+) -> Response:
+    if not verify_credentials(username, password):
         return templates.TemplateResponse(
             "login.html",
-            {"request": request, "error": "Incorrect password"},
+            {"request": request, "error": "Incorrect username or password"},
             status_code=401,
         )
     token = new_session_token()

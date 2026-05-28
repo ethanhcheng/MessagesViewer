@@ -5,11 +5,12 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/messagesviewer}"
 APP_USER="${APP_USER:-messagesviewer}"
+ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 
 if [[ -z "$ADMIN_PASSWORD" ]]; then
   echo "ERROR: set ADMIN_PASSWORD env var before running this script." >&2
-  echo "Example: ADMIN_PASSWORD='choose-a-strong-pw' bash deploy/install.sh" >&2
+  echo "Example: ADMIN_USER='admin' ADMIN_PASSWORD='choose-a-strong-pw' bash deploy/install.sh" >&2
   exit 1
 fi
 
@@ -36,6 +37,7 @@ chown -R "$APP_USER:$APP_USER" "$APP_DIR" /var/lib/messagesviewer
 echo "==> Writing environment file /etc/messagesviewer.env"
 umask 077
 cat > /etc/messagesviewer.env <<EOF
+MV_ADMIN_USER=$ADMIN_USER
 MV_ADMIN_PASSWORD=$ADMIN_PASSWORD
 MV_CONFIG_PATH=/var/lib/messagesviewer/config.json
 EOF

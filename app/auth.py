@@ -8,6 +8,10 @@ from fastapi import HTTPException, Request, status
 SESSION_COOKIE = "mv_session"
 
 
+def _admin_user() -> str:
+    return os.environ.get("MV_ADMIN_USER", "admin")
+
+
 def _admin_hash() -> str:
     """Get the SHA-256 hash of the configured admin password. Set MV_ADMIN_PASSWORD env var."""
     pw = os.environ.get("MV_ADMIN_PASSWORD")
@@ -18,12 +22,14 @@ def _admin_hash() -> str:
     return hashlib.sha256(pw.encode()).hexdigest()
 
 
-def verify_password(submitted: str) -> bool:
+def verify_credentials(username: str, password: str) -> bool:
     try:
-        return hmac.compare_digest(
-            hashlib.sha256(submitted.encode()).hexdigest(),
+        user_ok = hmac.compare_digest(username, _admin_user())
+        pw_ok = hmac.compare_digest(
+            hashlib.sha256(password.encode()).hexdigest(),
             _admin_hash(),
         )
+        return user_ok and pw_ok
     except RuntimeError:
         return False
 

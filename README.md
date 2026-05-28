@@ -89,6 +89,24 @@ See the script header for all available env vars (`CTID`, `STORAGE`,
 
 For step-by-step manual installation, see **[deploy/PROXMOX.md](deploy/PROXMOX.md)**.
 
+### Clean reinstall
+
+If a previous install left a half-built CT or a broken `/etc/fstab` entry, wipe
+the slate before re-running the installer:
+
+```bash
+# Destroy the old CT (replace 200 with your CTID)
+pct stop 200 2>/dev/null || true
+pct destroy 200
+
+# Unmount + remove any leftover NFS mount from a previous attempt
+umount /mnt/messages-backup 2>/dev/null || true
+sed -i '\|/mnt/messages-backup|d' /etc/fstab
+systemctl daemon-reload
+```
+
+Then re-run the one-line installer.
+
 ## Run as a service on any Linux host
 
 Inside any Debian/Ubuntu system, after cloning to `/opt/messagesviewer`:

@@ -17,7 +17,9 @@
 #   MEMORY_MB            RAM in MB                   (default: 1024)
 #   CORES                CPU cores                   (default: 2)
 #   UNPRIVILEGED         1 or 0                      (default: 0 — privileged, simpler NFS perms)
+#   ADMIN_USER           app login username          (default: admin)
 #   ADMIN_PASSWORD       app login password          (REQUIRED)
+#   CT_ROOT_PASSWORD     root password for the LXC   (REQUIRED — used for console/SSH login)
 #   NFS_SERVER           e.g. 192.168.1.10           (skip mount setup if empty)
 #   NFS_EXPORT           e.g. /mnt/tank/backups/messages
 #   HOST_MOUNT           where to mount on host      (default: /mnt/messages-backup)
@@ -55,6 +57,27 @@ prompt() {
     read -rp "$prompt_text${default:+ [$default]}: " val
   fi
   printf -v "$var_name" '%s' "${val:-$default}"
+}
+
+# Prompt for a password twice and confirm they match. Skips if already set via env.
+prompt_password_confirm() {
+  local var_name="$1" label="$2"
+  local current="${!var_name:-}"
+  if [[ -n "$current" ]]; then return; fi
+  if [[ ! -t 0 ]]; then
+    die "$var_name is required (non-interactive); set it as env var."
+  fi
+  local p1="" p2=""
+  while :; do
+    read -rsp "$label: " p1; echo
+    if [[ -z "$p1" ]]; then echo "Password cannot be empty."; continue; fi
+    read -rsp "$label (confirm): " p2; echo
+    if [[ "$p1" == "$p2" ]]; then
+      printf -v "$var_name" '%s' "$p1"
+      return
+    fi
+    warn "Passwords do not match. Try again."
+  done
 }
 
 # Pick a Proxmox storage that supports a given content type (rootdir | vztmpl).
@@ -122,8 +145,16 @@ command -v pvesm >/dev/null || die "pvesm not found."
 info "Detected $(pveversion | head -n1)"
 
 # ---------- gather config ----------
-prompt ADMIN_PASSWORD "" "App login password" 1
+echo
+echo "== App login (used to sign in to the Messages Viewer web UI) =="
+prompt ADMIN_USER "admin" "App login username"
+prompt_password_confirm ADMIN_PASSWORD "App login password"
 [[ -n "$ADMIN_PASSWORD" ]] || die "ADMIN_PASSWORD required."
+
+echo
+echo "== LXC root password (used to log into the container console / SSH as root) =="
+prompt_password_confirm CT_ROOT_PASSWORD "LXC root password"
+[[ -n "$CT_ROOT_PASSWORD" ]] || die "CT_ROOT_PASSWORD required."
 
 : "${HOSTNAME:=messagesviewer}"
 pick_storage STORAGE rootdir "Rootfs storage"
@@ -201,7 +232,8 @@ pct create "$CTID" "$TEMPLATE_PATH" \
   --rootfs "$STORAGE:$DISK_GB" \
   --unprivileged "$UNPRIVILEGED" \
   --features nesting=1 \
-  --onboot 1
+  --onboot 1 \
+  --password "$CT_ROOT_PASSWORD"
 
 if [[ -n "${NFS_SERVER:-}" ]]; then
   info "Bind-mounting $HOST_MOUNT → $CT_MOUNT (ro)"
@@ -235,7 +267,7 @@ info "Running in-container installer…"
 pct exec "$CTID" -- bash -c "
   set -e
   cd /opt/messagesviewer
-  ADMIN_PASSWORD='$ADMIN_PASSWORD' bash deploy/install.sh
+  ADMIN_USER='$ADMIN_USER' ADMIN_PASSWORD='$ADMIN_PASSWORD' bash deploy/install.sh
 "
 
 # ---------- summary ----------
