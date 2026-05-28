@@ -22,6 +22,7 @@
 #   CT_ROOT_PASSWORD     root password for the LXC   (REQUIRED — used for console/SSH login)
 #   NFS_SERVER           e.g. 192.168.1.10           (skip mount setup if empty)
 #   NFS_EXPORT           e.g. /mnt/tank/backups/messages
+#   NFS_VERS             3, 4, 4.1, 4.2              (default: auto-negotiate)
 #   HOST_MOUNT           where to mount on host      (default: /mnt/messages-backup)
 #   CT_MOUNT             where to expose inside CT   (default: /srv/messages)
 #   REPO_URL             git repo to clone in CT     (default: $REPO_URL_DEFAULT below)
@@ -204,18 +205,44 @@ ok "Template ready: $TEMPLATE_PATH"
 # ---------- nfs mount on host ----------
 if [[ -n "${NFS_SERVER:-}" ]]; then
   info "Setting up NFS mount on Proxmox host: $NFS_SERVER:$NFS_EXPORT → $HOST_MOUNT"
-  command -v mount.nfs4 >/dev/null || apt-get install -y nfs-common
+  command -v mount.nfs >/dev/null || apt-get install -y nfs-common
   mkdir -p "$HOST_MOUNT"
-  FSTAB_LINE="$NFS_SERVER:$NFS_EXPORT $HOST_MOUNT nfs ro,soft,timeo=30,vers=4 0 0"
-  if ! grep -qF "$HOST_MOUNT" /etc/fstab; then
-    echo "$FSTAB_LINE" >> /etc/fstab
-    ok "Added to /etc/fstab"
+
+  # Unmount and rewrite any stale fstab line for this mountpoint before retrying.
+  mountpoint -q "$HOST_MOUNT" && umount "$HOST_MOUNT" 2>/dev/null || true
+  sed -i "\|[[:space:]]${HOST_MOUNT}[[:space:]]|d" /etc/fstab
+
+  attempt_mount() {
+    local opts="$1"
+    local fstab_line="$NFS_SERVER:$NFS_EXPORT $HOST_MOUNT nfs $opts 0 0"
+    echo "$fstab_line" >> /etc/fstab
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if mount "$HOST_MOUNT" 2>/tmp/nfs_mount_err; then
+      ok "Mounted with options: $opts"
+      return 0
+    fi
+    warn "Mount failed with '$opts': $(cat /tmp/nfs_mount_err)"
+    sed -i "\|[[:space:]]${HOST_MOUNT}[[:space:]]|d" /etc/fstab
+    return 1
+  }
+
+  mounted=0
+  if [[ -n "${NFS_VERS:-}" ]]; then
+    attempt_mount "ro,soft,timeo=30,vers=${NFS_VERS}" && mounted=1
   else
-    info "/etc/fstab already references $HOST_MOUNT — leaving as-is"
+    # Auto-negotiate first (mount.nfs tries v4.2 → v4.1 → v4 → v3).
+    attempt_mount "ro,soft,timeo=30" && mounted=1
+    # Some servers (e.g. TrueNAS Core out of the box) only enable v3 and refuse the v4 probe.
+    if [[ $mounted -eq 0 ]]; then
+      info "Retrying with vers=3 (typical for TrueNAS Core)…"
+      attempt_mount "ro,soft,timeo=30,vers=3" && mounted=1
+    fi
   fi
-  if ! mountpoint -q "$HOST_MOUNT"; then
-    mount "$HOST_MOUNT" || die "NFS mount failed. Check the export on $NFS_SERVER."
+
+  if [[ $mounted -eq 0 ]]; then
+    die "NFS mount failed. Verify the export with: showmount -e $NFS_SERVER"
   fi
+
   [[ -f "$HOST_MOUNT/chat.db" ]] \
     && ok "Found chat.db at $HOST_MOUNT" \
     || warn "chat.db not found in $HOST_MOUNT (you can still set the data dir later in the UI)."
