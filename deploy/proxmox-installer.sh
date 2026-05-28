@@ -8,8 +8,8 @@
 # your NAS, installs the app inside, and prints the URL.
 #
 # Env-var overrides (all optional — script will prompt if missing in TTY mode):
-#   CTID                 e.g. 200                    (default: next free >=200)
-#   HOSTNAME             container hostname          (default: messagesviewer)
+#   CTID                 e.g. 200                    (default: next free CT/VM ID starting at 100)
+#   CT_HOSTNAME          container hostname          (default: prompted, falls back to messagesviewer)
 #   STORAGE              Proxmox storage for rootfs  (default: prompt / auto-detect)
 #   TEMPLATE_STORAGE     where templates live        (default: prompt / auto-detect)
 #   BRIDGE               network bridge              (default: vmbr0)
@@ -157,7 +157,8 @@ echo "== LXC root password (used to log into the container console / SSH as root
 prompt_password_confirm CT_ROOT_PASSWORD "LXC root password"
 [[ -n "$CT_ROOT_PASSWORD" ]] || die "CT_ROOT_PASSWORD required."
 
-: "${HOSTNAME:=messagesviewer}"
+prompt CT_HOSTNAME "messagesviewer" "Container hostname"
+
 pick_storage STORAGE rootdir "Rootfs storage"
 pick_storage TEMPLATE_STORAGE vztmpl "Template storage"
 : "${BRIDGE:=vmbr0}"
@@ -170,11 +171,18 @@ pick_storage TEMPLATE_STORAGE vztmpl "Template storage"
 : "${REPO_URL:=$REPO_URL_DEFAULT}"
 : "${REPO_REF:=main}"
 
+# An ID is taken if either a CT (pct) or a VM (qm) is using it — they share the namespace.
+id_taken() {
+  pct status "$1" >/dev/null 2>&1 && return 0
+  command -v qm >/dev/null && qm status "$1" >/dev/null 2>&1 && return 0
+  return 1
+}
+
 if [[ -z "${CTID:-}" ]]; then
-  CTID=200
-  while pct status "$CTID" >/dev/null 2>&1; do CTID=$((CTID + 1)); done
+  CTID=100
+  while id_taken "$CTID"; do CTID=$((CTID + 1)); done
 fi
-info "Using CTID=$CTID, HOSTNAME=$HOSTNAME, STORAGE=$STORAGE"
+info "Using CTID=$CTID, hostname=$CT_HOSTNAME, storage=$STORAGE"
 
 prompt NFS_SERVER "" "NFS server IP (blank to skip mount setup)"
 if [[ -n "${NFS_SERVER}" ]]; then
@@ -251,7 +259,7 @@ fi
 # ---------- create ct ----------
 info "Creating LXC $CTID…"
 pct create "$CTID" "$TEMPLATE_PATH" \
-  --hostname "$HOSTNAME" \
+  --hostname "$CT_HOSTNAME" \
   --cores "$CORES" \
   --memory "$MEMORY_MB" \
   --swap 512 \
@@ -302,10 +310,10 @@ CT_IP="$(pct exec "$CTID" -- ip -4 -o addr show eth0 2>/dev/null | awk '{print $
 echo
 ok "Messages Viewer is installed."
 echo
-echo "  Container:    $CTID ($HOSTNAME)"
+echo "  Container:    $CTID ($CT_HOSTNAME)"
 echo "  IP:           ${CT_IP:-<not yet assigned, run \`pct exec $CTID -- ip a\`>}"
 echo "  URL:          http://${CT_IP:-<ct-ip>}:8000/"
-echo "  Login:        with the password you supplied"
+echo "  Login:        $ADMIN_USER / (password you supplied)"
 if [[ -n "${NFS_SERVER:-}" ]]; then
   echo "  Data dir:     $CT_MOUNT  (already bind-mounted from $NFS_SERVER:$NFS_EXPORT)"
   echo "                Enter that path on the setup screen."
