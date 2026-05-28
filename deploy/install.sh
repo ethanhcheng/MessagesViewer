@@ -34,6 +34,10 @@ python3 -m venv .venv
 mkdir -p /var/lib/messagesviewer
 chown -R "$APP_USER:$APP_USER" "$APP_DIR" /var/lib/messagesviewer
 
+# Allow root to run git operations in the messagesviewer-owned repo without
+# triggering "dubious ownership" — needed for deploy/update.sh to work.
+git config --system --add safe.directory "$APP_DIR" 2>/dev/null || true
+
 echo "==> Writing environment file /etc/messagesviewer.env"
 umask 077
 cat > /etc/messagesviewer.env <<EOF
