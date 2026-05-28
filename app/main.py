@@ -1,3 +1,5 @@
+import logging
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response
@@ -5,9 +7,12 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import db
+from . import cache, db
 from .auth import SESSION_COOKIE, is_authenticated, new_session_token, require_auth, verify_credentials
 from .config import config
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+log = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 app = FastAPI(title="Messages Viewer")
@@ -15,6 +20,15 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 VALID_SESSIONS: set[str] = set()
+
+
+@app.on_event("startup")
+def prime_cache() -> None:
+    if config.is_configured():
+        try:
+            cache.refresh_chat_db_cache()
+        except Exception as exc:  # pragma: no cover
+            log.warning("Cache prime failed at startup: %s", exc)
 
 
 def auth_dep(request: Request) -> None:
@@ -87,6 +101,12 @@ def setup_submit(request: Request, data_dir: str = Form(...), _: None = Depends(
             status_code=400,
         )
     config.set_data_dir(str(path))
+    cache.invalidate_cache()
+    db.clear_decoder_cache()
+    try:
+        cache.refresh_chat_db_cache()
+    except Exception as exc:
+        log.warning("Cache refresh after setup failed: %s", exc)
     return RedirectResponse("/", status_code=303)
 
 
@@ -110,11 +130,20 @@ def api_chat_messages(
     offset: int = 0,
     _: None = Depends(auth_dep),
 ) -> list[dict]:
-    messages = db.get_chat_messages(chat_id, limit=limit, offset=offset)
-    for msg in messages:
-        if msg["attachment_count"]:
-            msg["attachments"] = db.get_message_attachments(msg["message_id"])
-    return messages
+    return db.get_chat_messages(chat_id, limit=limit, offset=offset)
+
+
+@app.get("/api/cache/status")
+def api_cache_status(_: None = Depends(auth_dep)) -> dict:
+    return asdict(cache.cache_status())
+
+
+@app.post("/api/cache/refresh")
+def api_cache_refresh(_: None = Depends(auth_dep)) -> dict:
+    ok = cache.refresh_chat_db_cache()
+    if ok:
+        db.clear_decoder_cache()
+    return {"refreshed": ok, **asdict(cache.cache_status())}
 
 
 @app.get("/api/search")

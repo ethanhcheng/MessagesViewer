@@ -1,8 +1,10 @@
 import sqlite3
 from contextlib import contextmanager
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterator, Optional
 
+from . import cache
 from .config import config
 
 APPLE_EPOCH_OFFSET = 978307200  # Seconds between Unix epoch and 2001-01-01
@@ -10,9 +12,11 @@ APPLE_EPOCH_OFFSET = 978307200  # Seconds between Unix epoch and 2001-01-01
 
 @contextmanager
 def get_conn() -> Iterator[sqlite3.Connection]:
-    db_path = config.chat_db_path
-    if db_path is None or not db_path.exists():
-        raise RuntimeError("chat.db not configured or missing")
+    db_path = config.cache_db_path
+    if not db_path.exists():
+        # Cold start — populate the cache lazily from the configured source.
+        if not cache.refresh_chat_db_cache():
+            raise RuntimeError("chat.db not configured or missing")
     uri = f"file:{db_path}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
@@ -26,75 +30,118 @@ def apple_ts_to_unix(ts: Optional[int]) -> Optional[float]:
     """Apple's `message.date` is nanoseconds since 2001-01-01 (or seconds in old DBs)."""
     if ts is None or ts == 0:
         return None
-    # Heuristic: nanosecond timestamps are very large
     if ts > 10**12:
         ts = ts / 1_000_000_000
     return ts + APPLE_EPOCH_OFFSET
 
 
-def decode_attributed_body(blob: Optional[bytes]) -> Optional[str]:
-    """Decode the typedstream-encoded `attributedBody` blob used in Ventura+.
+# ---------- attributedBody decoder ----------
+#
+# Apple stores message text in `attributedBody` as a `typedstream`-archived
+# NSAttributedString. We walk the byte stream looking for the primitive-string
+# type marker `\x01\x2b` (the `+` typecode), read the length-prefixed UTF-8
+# payload after it, and skip anything that looks like a Foundation class name.
 
-    Uses a byte-pattern scan to extract the NSString payload — works for plain
-    text messages, which is the common case. If a `typedstream` Python library
-    is present, we try it first for richer parsing; otherwise the fallback is
-    used directly.
+_FOUNDATION_CLASS_NAMES = frozenset({
+    "NSString", "NSMutableString",
+    "NSAttributedString", "NSMutableAttributedString",
+    "NSObject", "NSDictionary", "NSMutableDictionary",
+    "NSArray", "NSMutableArray",
+    "NSNumber", "NSData", "NSValue", "NSNull",
+    "NSColor", "NSFont", "NSURL",
+    "NSRange", "NSRect", "NSPoint", "NSSize",
+    "NSParagraphStyle", "NSMutableParagraphStyle",
+    "NSDecimalNumber", "NSDate", "NSError",
+})
+
+# Apple Messages attribute keys — show up as strings inside the attribute dict
+# but are never the user-visible text.
+_MESSAGE_ATTR_KEYS = frozenset({
+    "__kIMMessagePartAttributeName",
+    "__kIMFileTransferGUIDAttributeName",
+    "__kIMMentionConfirmedMention",
+    "__kIMLinkAttributeName",
+    "__kIMBaseWritingDirectionAttributeName",
+    "__kIMCalloutAttributeName",
+    "__kIMOneTimeCodeAttributeName",
+    "__kIMDataDetectedAttributeName",
+    "NSNumber", "NSValue",  # double-listed, harmless
+})
+
+
+def _looks_like_class_name(s: str) -> bool:
+    if s in _FOUNDATION_CLASS_NAMES or s in _MESSAGE_ATTR_KEYS:
+        return True
+    if s.startswith("__kIM"):
+        return True
+    # Anything ObjC-class-shaped: NS/CF/CG/CA prefix followed by an uppercase letter.
+    if len(s) >= 3 and s[:2] in ("NS", "CF", "CG", "CA", "UI") and s[2].isupper():
+        return True
+    return False
+
+
+def _read_typedstream_length(blob: bytes, cursor: int) -> tuple[int, int]:
+    """Read a variable-length integer at `cursor`. Returns (length, new_cursor).
+    Returns (-1, cursor) if the encoding is malformed."""
+    if cursor >= len(blob):
+        return -1, cursor
+    b = blob[cursor]
+    cursor += 1
+    if b < 0x80:
+        return b, cursor
+    if b == 0x81 and cursor + 2 <= len(blob):
+        return int.from_bytes(blob[cursor:cursor + 2], "little"), cursor + 2
+    if b == 0x82 and cursor + 4 <= len(blob):
+        return int.from_bytes(blob[cursor:cursor + 4], "little"), cursor + 4
+    return -1, cursor
+
+
+@lru_cache(maxsize=50000)
+def _decode_attributed_body_impl(blob: bytes) -> Optional[str]:
+    """Scan a typedstream archive for the user-visible message text.
+
+    Strategy:
+      1. Find every `\\x01\\x2b` (primitive-string type marker) in the blob.
+      2. Read the length-prefixed UTF-8 string after each marker.
+      3. Discard class-name and attribute-key strings.
+      4. Return the longest remaining candidate — that's almost always the
+         message body (attribute strings like "Helvetica" or short URLs are
+         shorter than typical message text).
     """
+    candidates: list[str] = []
+    pos = 0
+    while pos < len(blob):
+        idx = blob.find(b"\x01\x2b", pos)
+        if idx < 0:
+            break
+        length, after = _read_typedstream_length(blob, idx + 2)
+        if length <= 0 or after + length > len(blob):
+            pos = idx + 2
+            continue
+        try:
+            text = blob[after:after + length].decode("utf-8")
+        except UnicodeDecodeError:
+            text = blob[after:after + length].decode("utf-8", errors="replace")
+        if text and not _looks_like_class_name(text):
+            candidates.append(text)
+        pos = after + length
+
+    if not candidates:
+        return None
+    # The message body is typically the longest non-class candidate.
+    return max(candidates, key=len)
+
+
+def decode_attributed_body(blob: Optional[bytes]) -> Optional[str]:
     if not blob:
         return None
     try:
-        import typedstream  # type: ignore
-
-        ts = typedstream.unarchive_from_data(blob)
-        for obj in _walk(ts):
-            if isinstance(obj, str) and obj and obj != "NSString" and obj != "NSDictionary":
-                return obj
-    except Exception:
-        pass
-    return _fallback_extract_text(blob)
-
-
-def _walk(obj, _seen=None):
-    if _seen is None:
-        _seen = set()
-    oid = id(obj)
-    if oid in _seen:
-        return
-    _seen.add(oid)
-    yield obj
-    if hasattr(obj, "contents"):
-        for c in obj.contents:  # type: ignore[attr-defined]
-            yield from _walk(c, _seen)
-    elif isinstance(obj, (list, tuple)):
-        for c in obj:
-            yield from _walk(c, _seen)
-    elif isinstance(obj, dict):
-        for c in obj.values():
-            yield from _walk(c, _seen)
-
-
-def _fallback_extract_text(blob: bytes) -> Optional[str]:
-    # NSString payload sits after the marker bytes 01 2B in typedstream archives.
-    marker = b"\x01\x2b"
-    idx = blob.find(marker)
-    if idx == -1:
-        return None
-    cursor = idx + len(marker)
-    if cursor >= len(blob):
-        return None
-    length = blob[cursor]
-    cursor += 1
-    if length == 0x81 and cursor + 2 <= len(blob):
-        length = int.from_bytes(blob[cursor:cursor + 2], "little")
-        cursor += 2
-    elif length == 0x82 and cursor + 4 <= len(blob):
-        length = int.from_bytes(blob[cursor:cursor + 4], "little")
-        cursor += 4
-    try:
-        return blob[cursor:cursor + length].decode("utf-8", errors="replace")
+        return _decode_attributed_body_impl(bytes(blob))
     except Exception:
         return None
 
+
+# ---------- queries ----------
 
 def list_chats(limit: int = 500) -> list[dict]:
     sql = """
@@ -141,7 +188,7 @@ def list_chats(limit: int = 500) -> list[dict]:
 
 
 def get_chat_messages(chat_id: int, limit: int = 1000, offset: int = 0) -> list[dict]:
-    sql = """
+    msg_sql = """
         SELECT
             m.ROWID AS message_id,
             m.guid,
@@ -150,11 +197,7 @@ def get_chat_messages(chat_id: int, limit: int = 1000, offset: int = 0) -> list[
             m.date,
             m.is_from_me,
             m.service,
-            h.id AS sender_id,
-            (
-                SELECT COUNT(*) FROM message_attachment_join maj
-                WHERE maj.message_id = m.ROWID
-            ) AS attachment_count
+            h.id AS sender_id
         FROM chat_message_join cmj
         JOIN message m ON m.ROWID = cmj.message_id
         LEFT JOIN handle h ON h.ROWID = m.handle_id
@@ -163,10 +206,14 @@ def get_chat_messages(chat_id: int, limit: int = 1000, offset: int = 0) -> list[
         LIMIT ? OFFSET ?
     """
     with get_conn() as conn:
-        rows = conn.execute(sql, (chat_id, limit, offset)).fetchall()
+        rows = conn.execute(msg_sql, (chat_id, limit, offset)).fetchall()
+        message_ids = [r["message_id"] for r in rows]
+        attachments_by_msg = _attachments_for(conn, message_ids)
+
     results = []
     for r in rows:
         text = r["text"] or decode_attributed_body(r["attributedBody"])
+        atts = attachments_by_msg.get(r["message_id"], [])
         results.append({
             "message_id": r["message_id"],
             "guid": r["guid"],
@@ -175,21 +222,33 @@ def get_chat_messages(chat_id: int, limit: int = 1000, offset: int = 0) -> list[
             "is_from_me": bool(r["is_from_me"]),
             "service": r["service"],
             "sender_id": r["sender_id"],
-            "attachment_count": r["attachment_count"],
+            "attachment_count": len(atts),
+            "attachments": atts,
         })
     return results
 
 
-def get_message_attachments(message_id: int) -> list[dict]:
-    sql = """
-        SELECT a.ROWID AS attachment_id, a.filename, a.mime_type, a.transfer_name, a.total_bytes
+def _attachments_for(conn: sqlite3.Connection, message_ids: list[int]) -> dict[int, list[dict]]:
+    if not message_ids:
+        return {}
+    placeholders = ",".join("?" * len(message_ids))
+    sql = f"""
+        SELECT maj.message_id, a.ROWID AS attachment_id, a.filename,
+               a.mime_type, a.transfer_name, a.total_bytes
         FROM message_attachment_join maj
         JOIN attachment a ON a.ROWID = maj.attachment_id
-        WHERE maj.message_id = ?
+        WHERE maj.message_id IN ({placeholders})
     """
-    with get_conn() as conn:
-        rows = conn.execute(sql, (message_id,)).fetchall()
-    return [dict(r) for r in rows]
+    by_msg: dict[int, list[dict]] = {}
+    for r in conn.execute(sql, message_ids):
+        by_msg.setdefault(r["message_id"], []).append({
+            "attachment_id": r["attachment_id"],
+            "filename": r["filename"],
+            "mime_type": r["mime_type"],
+            "transfer_name": r["transfer_name"],
+            "total_bytes": r["total_bytes"],
+        })
+    return by_msg
 
 
 def get_attachment(attachment_id: int) -> Optional[dict]:
@@ -202,7 +261,8 @@ def get_attachment(attachment_id: int) -> Optional[dict]:
 
 
 def resolve_attachment_path(filename: str) -> Optional[Path]:
-    """Filenames in the DB use `~/Library/Messages/Attachments/...`. Map onto our data dir."""
+    """Filenames in the DB use `~/Library/Messages/Attachments/...`. Map onto our data dir.
+    Attachments are still read from the source data_dir (NFS) — only chat.db is cached locally."""
     if not filename:
         return None
     if filename.startswith("~/Library/Messages/"):
@@ -213,7 +273,6 @@ def resolve_attachment_path(filename: str) -> Optional[Path]:
     if not data_dir:
         return None
     candidate = (Path(data_dir) / rel).resolve()
-    # Prevent path traversal — must stay under data_dir
     try:
         candidate.relative_to(Path(data_dir).resolve())
     except ValueError:
@@ -222,8 +281,8 @@ def resolve_attachment_path(filename: str) -> Optional[Path]:
 
 
 def search_messages(query: str, limit: int = 200) -> list[dict]:
-    """Substring search on plaintext `text` column. Hex-blob bodies are not searched
-    here (would require decoding every row); a future indexer could materialize them."""
+    """Substring search on plaintext `text` column. Hex-blob bodies aren't
+    indexed yet (would need an FTS table built from decoded text)."""
     sql = """
         SELECT
             m.ROWID AS message_id,
@@ -256,3 +315,9 @@ def search_messages(query: str, limit: int = 200) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def clear_decoder_cache() -> None:
+    """Call after refreshing the local DB cache — decoded bodies may change
+    if the source DB was updated."""
+    _decode_attributed_body_impl.cache_clear()

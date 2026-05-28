@@ -209,6 +209,26 @@ els.filterAttachments.addEventListener("change", (e) => {
   if (state.selectedChatId) selectChat(state.selectedChatId);
 });
 
+const refreshBtn = document.getElementById("refresh-cache");
+if (refreshBtn) {
+  refreshBtn.addEventListener("click", async () => {
+    refreshBtn.disabled = true;
+    const original = refreshBtn.textContent;
+    refreshBtn.textContent = "Refreshing…";
+    try {
+      const r = await fetch("/api/cache/refresh", { method: "POST", credentials: "same-origin" });
+      if (!r.ok) throw new Error(`status ${r.status}`);
+      await loadChats();
+      if (state.selectedChatId) await selectChat(state.selectedChatId);
+    } catch (err) {
+      alert(`Refresh failed: ${err.message}`);
+    } finally {
+      refreshBtn.textContent = original;
+      refreshBtn.disabled = false;
+    }
+  });
+}
+
 loadChats().catch((err) => {
   els.chatList.innerHTML = `<li class="empty-state">Error: ${escapeHtml(err.message)}</li>`;
 });
