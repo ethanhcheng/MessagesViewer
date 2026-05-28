@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Messages Viewer — Setup</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body class="auth-page">
+  <main class="auth-card wide">
+    <h1>Choose Data Directory</h1>
+    <p class="muted">
+      Point this at the directory on the NAS that contains your backed-up <code>chat.db</code>
+      file and <code>Attachments/</code> folder.
+    </p>
+    <form method="post" action="/setup">
+      <label for="data_dir">Data directory (absolute path)</label>
+      <input
+        id="data_dir"
+        name="data_dir"
+        type="text"
+        placeholder="/mnt/nas/messages-backup-2025"
+        value="{{ current or '' }}"
+        required
+      />
+      {% if error %}<p class="error">{{ error }}</p>{% endif %}
+      <div class="row">
+        <button type="submit">Save and continue</button>
+        <form method="post" action="/logout" style="display:inline">
+          <button type="submit" class="ghost">Sign out</button>
+        </form>
+      </div>
+    </form>
+  </main>
+</body>
+</html>

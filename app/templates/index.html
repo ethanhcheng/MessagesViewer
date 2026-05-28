@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Messages Viewer</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body class="app-page">
+  <aside class="sidebar">
+    <header class="sidebar-header">
+      <div class="title-row">
+        <h1>Messages</h1>
+        <form method="post" action="/logout" class="logout-form">
+          <button type="submit" class="ghost small" title="Sign out">Sign out</button>
+        </form>
+      </div>
+      <input id="search" type="search" placeholder="Search" autocomplete="off" />
+      <div class="filters">
+        <label><input type="checkbox" id="filter-with-attachments" /> With attachments</label>
+      </div>
+    </header>
+    <ul id="chat-list" class="chat-list"></ul>
+    <footer class="sidebar-footer">
+      <a href="/setup" class="muted small">Change data directory</a>
+    </footer>
+  </aside>
+  <main class="thread-pane">
+    <header id="thread-header" class="thread-header">
+      <h2 id="thread-title">Select a conversation</h2>
+      <span id="thread-subtitle" class="muted small"></span>
+    </header>
+    <div id="thread" class="thread"></div>
+  </main>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
