@@ -67,7 +67,7 @@ in the sidebar footer.
 On your Proxmox VE host, as root:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/<your-user>/messagesviewer/main/deploy/proxmox-installer.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/ethanhcheng/MessagesViewer/main/deploy/proxmox-installer.sh)"
 ```
 
 The installer creates a Debian 12 LXC, optionally configures an NFS mount
@@ -79,7 +79,7 @@ NFS details; or pass them via env vars for fully unattended runs:
 ADMIN_PASSWORD='choose-a-strong-pw' \
 NFS_SERVER='192.168.1.10' \
 NFS_EXPORT='/mnt/tank/backups/messages' \
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/<your-user>/messagesviewer/main/deploy/proxmox-installer.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/ethanhcheng/MessagesViewer/main/deploy/proxmox-installer.sh)"
 ```
 
 See the script header for all available env vars (`CTID`, `STORAGE`,
