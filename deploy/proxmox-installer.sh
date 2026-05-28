@@ -10,8 +10,8 @@
 # Env-var overrides (all optional — script will prompt if missing in TTY mode):
 #   CTID                 e.g. 200                    (default: next free >=200)
 #   HOSTNAME             container hostname          (default: messagesviewer)
-#   STORAGE              Proxmox storage for rootfs  (default: local-lvm)
-#   TEMPLATE_STORAGE     where templates live        (default: local)
+#   STORAGE              Proxmox storage for rootfs  (default: prompt / auto-detect)
+#   TEMPLATE_STORAGE     where templates live        (default: prompt / auto-detect)
 #   BRIDGE               network bridge              (default: vmbr0)
 #   DISK_GB              rootfs size in GB           (default: 8)
 #   MEMORY_MB            RAM in MB                   (default: 1024)
@@ -57,11 +57,67 @@ prompt() {
   printf -v "$var_name" '%s' "${val:-$default}"
 }
 
+# Pick a Proxmox storage that supports a given content type (rootdir | vztmpl).
+# Validates an env var if set, auto-picks if only one option, otherwise prompts.
+pick_storage() {
+  local var_name="$1" content="$2" label="$3"
+  local current="${!var_name:-}"
+  local options=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && options+=("$line")
+  done < <(pvesm status --content "$content" 2>/dev/null | awk 'NR>1 && $3=="active" {print $1}')
+
+  if [[ ${#options[@]} -eq 0 ]]; then
+    die "No active Proxmox storage supports content type '$content'. Configure one in Datacenter → Storage."
+  fi
+
+  if [[ -n "$current" ]]; then
+    local match=0
+    for s in "${options[@]}"; do [[ "$s" == "$current" ]] && match=1; done
+    if [[ $match -eq 0 ]]; then
+      die "$var_name='$current' not found. Available for $content: ${options[*]}"
+    fi
+    info "$label: $current"
+    return
+  fi
+
+  if [[ ${#options[@]} -eq 1 ]]; then
+    printf -v "$var_name" '%s' "${options[0]}"
+    info "$label: ${options[0]} (only option)"
+    return
+  fi
+
+  if [[ ! -t 0 ]]; then
+    printf -v "$var_name" '%s' "${options[0]}"
+    warn "$label: defaulting to ${options[0]} (non-interactive). Override with $var_name=…"
+    return
+  fi
+
+  echo
+  echo "Available storages for $label (content=$content):"
+  local i=1
+  for s in "${options[@]}"; do
+    printf "  %d) %s\n" "$i" "$s"
+    i=$((i + 1))
+  done
+  local choice=""
+  while :; do
+    read -rp "Select [1-${#options[@]}]: " choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#options[@]} )); then
+      printf -v "$var_name" '%s' "${options[$((choice - 1))]}"
+      info "$label: ${options[$((choice - 1))]}"
+      return
+    fi
+    echo "Invalid choice."
+  done
+}
+
 # ---------- preflight ----------
 [[ $EUID -eq 0 ]] || die "Run as root on the Proxmox host."
 command -v pveversion >/dev/null || die "pveversion not found — this script must run on a Proxmox VE host."
 command -v pct >/dev/null || die "pct not found."
 command -v pveam >/dev/null || die "pveam not found."
+command -v pvesm >/dev/null || die "pvesm not found."
 
 info "Detected $(pveversion | head -n1)"
 
@@ -70,8 +126,8 @@ prompt ADMIN_PASSWORD "" "App login password" 1
 [[ -n "$ADMIN_PASSWORD" ]] || die "ADMIN_PASSWORD required."
 
 : "${HOSTNAME:=messagesviewer}"
-: "${STORAGE:=local-lvm}"
-: "${TEMPLATE_STORAGE:=local}"
+pick_storage STORAGE rootdir "Rootfs storage"
+pick_storage TEMPLATE_STORAGE vztmpl "Template storage"
 : "${BRIDGE:=vmbr0}"
 : "${DISK_GB:=8}"
 : "${MEMORY_MB:=1024}"
