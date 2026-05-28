@@ -27,7 +27,7 @@
 #
 set -euo pipefail
 
-REPO_URL_DEFAULT="https://github.com/REPLACE_ME/messagesviewer.git"
+REPO_URL_DEFAULT="https://github.com/ethanhcheng/MessagesViewer.git"
 
 # ---------- ui helpers ----------
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; BLUE=$'\033[0;34m'; NC=$'\033[0m'
