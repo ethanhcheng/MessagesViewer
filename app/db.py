@@ -221,7 +221,7 @@ def get_chat_messages(chat_id: int, limit: int = 1000, offset: int = 0) -> list[
         JOIN message m ON m.ROWID = cmj.message_id
         LEFT JOIN handle h ON h.ROWID = m.handle_id
         WHERE cmj.chat_id = ?
-        ORDER BY m.date DESC
+        ORDER BY m.date DESC, m.ROWID DESC
         LIMIT ? OFFSET ?
     """
     with get_conn() as conn:
