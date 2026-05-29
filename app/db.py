@@ -202,11 +202,12 @@ def get_chat_messages(chat_id: int, limit: int = 1000, offset: int = 0) -> list[
         JOIN message m ON m.ROWID = cmj.message_id
         LEFT JOIN handle h ON h.ROWID = m.handle_id
         WHERE cmj.chat_id = ?
-        ORDER BY m.date ASC
+        ORDER BY m.date DESC
         LIMIT ? OFFSET ?
     """
     with get_conn() as conn:
         rows = conn.execute(msg_sql, (chat_id, limit, offset)).fetchall()
+        rows = list(reversed(rows))  # newest-N fetched desc -> display oldest->newest
         message_ids = [r["message_id"] for r in rows]
         attachments_by_msg = _attachments_for(conn, message_ids)
 
