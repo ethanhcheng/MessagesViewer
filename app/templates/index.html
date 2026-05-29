@@ -16,11 +16,12 @@
       </div>
       <input id="search" type="search" placeholder="Search" autocomplete="off" />
       <div class="filters">
-        <label><input type="checkbox" id="filter-with-attachments" /> With attachments</label>
+        <button id="media-toggle" class="ghost small" disabled title="Show photos, videos and files in this conversation">Media</button>
       </div>
     </header>
     <ul id="chat-list" class="chat-list"></ul>
     <footer class="sidebar-footer">
+      <button id="refresh-cache" class="ghost small" title="Re-copy chat.db from the source">Refresh data</button>
       <a href="/setup" class="muted small">Change data directory</a>
     </footer>
   </aside>

@@ -1,3 +1,5 @@
+import logging
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response
@@ -5,9 +7,12 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import db
-from .auth import SESSION_COOKIE, is_authenticated, new_session_token, require_auth, verify_password
+from . import cache, db
+from .auth import SESSION_COOKIE, is_authenticated, new_session_token, require_auth, verify_credentials
 from .config import config
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+log = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 app = FastAPI(title="Messages Viewer")
@@ -15,6 +20,15 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 VALID_SESSIONS: set[str] = set()
+
+
+@app.on_event("startup")
+def prime_cache() -> None:
+    if config.is_configured():
+        try:
+            cache.refresh_chat_db_cache()
+        except Exception as exc:  # pragma: no cover
+            log.warning("Cache prime failed at startup: %s", exc)
 
 
 def auth_dep(request: Request) -> None:
@@ -36,11 +50,15 @@ def login_page(request: Request) -> Response:
 
 
 @app.post("/login")
-def login_submit(request: Request, password: str = Form(...)) -> Response:
-    if not verify_password(password):
+def login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+) -> Response:
+    if not verify_credentials(username, password):
         return templates.TemplateResponse(
             "login.html",
-            {"request": request, "error": "Incorrect password"},
+            {"request": request, "error": "Incorrect username or password"},
             status_code=401,
         )
     token = new_session_token()
@@ -64,12 +82,22 @@ def logout(request: Request) -> Response:
 def setup_page(request: Request, _: None = Depends(auth_dep)) -> Response:
     return templates.TemplateResponse(
         "setup.html",
-        {"request": request, "current": config.data_dir, "error": None},
+        {
+            "request": request,
+            "current": config.data_dir,
+            "ab_current": config.addressbook_path,
+            "error": None,
+        },
     )
 
 
 @app.post("/setup")
-def setup_submit(request: Request, data_dir: str = Form(...), _: None = Depends(auth_dep)) -> Response:
+def setup_submit(
+    request: Request,
+    data_dir: str = Form(...),
+    addressbook_path: str = Form(""),
+    _: None = Depends(auth_dep),
+) -> Response:
     path = Path(data_dir).expanduser()
     chat_db = path / "chat.db"
     if not chat_db.exists():
@@ -78,11 +106,36 @@ def setup_submit(request: Request, data_dir: str = Form(...), _: None = Depends(
             {
                 "request": request,
                 "current": data_dir,
+                "ab_current": addressbook_path,
                 "error": f"chat.db not found at {chat_db}",
             },
             status_code=400,
         )
+    ab = addressbook_path.strip()
+    if ab:
+        ab_path = Path(ab).expanduser()
+        if not ab_path.exists():
+            return templates.TemplateResponse(
+                "setup.html",
+                {
+                    "request": request,
+                    "current": data_dir,
+                    "ab_current": addressbook_path,
+                    "error": f"AddressBook not found at {ab_path}",
+                },
+                status_code=400,
+            )
+        config.set_addressbook_path(str(ab_path))
+    else:
+        config.set_addressbook_path(None)
     config.set_data_dir(str(path))
+    cache.invalidate_cache()
+    db.clear_decoder_cache()
+    db.clear_contacts_cache()
+    try:
+        cache.refresh_chat_db_cache()
+    except Exception as exc:
+        log.warning("Cache refresh after setup failed: %s", exc)
     return RedirectResponse("/", status_code=303)
 
 
@@ -106,11 +159,25 @@ def api_chat_messages(
     offset: int = 0,
     _: None = Depends(auth_dep),
 ) -> list[dict]:
-    messages = db.get_chat_messages(chat_id, limit=limit, offset=offset)
-    for msg in messages:
-        if msg["attachment_count"]:
-            msg["attachments"] = db.get_message_attachments(msg["message_id"])
-    return messages
+    return db.get_chat_messages(chat_id, limit=limit, offset=offset)
+
+
+@app.get("/api/chats/{chat_id}/attachments")
+def api_chat_attachments(chat_id: int, _: None = Depends(auth_dep)) -> list[dict]:
+    return db.get_chat_attachments(chat_id)
+
+
+@app.get("/api/cache/status")
+def api_cache_status(_: None = Depends(auth_dep)) -> dict:
+    return asdict(cache.cache_status())
+
+
+@app.post("/api/cache/refresh")
+def api_cache_refresh(_: None = Depends(auth_dep)) -> dict:
+    ok = cache.refresh_chat_db_cache()
+    if ok:
+        db.clear_decoder_cache()
+    return {"refreshed": ok, **asdict(cache.cache_status())}
 
 
 @app.get("/api/search")
