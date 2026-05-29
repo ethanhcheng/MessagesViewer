@@ -82,12 +82,22 @@ def logout(request: Request) -> Response:
 def setup_page(request: Request, _: None = Depends(auth_dep)) -> Response:
     return templates.TemplateResponse(
         "setup.html",
-        {"request": request, "current": config.data_dir, "error": None},
+        {
+            "request": request,
+            "current": config.data_dir,
+            "ab_current": config.addressbook_path,
+            "error": None,
+        },
     )
 
 
 @app.post("/setup")
-def setup_submit(request: Request, data_dir: str = Form(...), _: None = Depends(auth_dep)) -> Response:
+def setup_submit(
+    request: Request,
+    data_dir: str = Form(...),
+    addressbook_path: str = Form(""),
+    _: None = Depends(auth_dep),
+) -> Response:
     path = Path(data_dir).expanduser()
     chat_db = path / "chat.db"
     if not chat_db.exists():
@@ -96,13 +106,32 @@ def setup_submit(request: Request, data_dir: str = Form(...), _: None = Depends(
             {
                 "request": request,
                 "current": data_dir,
+                "ab_current": addressbook_path,
                 "error": f"chat.db not found at {chat_db}",
             },
             status_code=400,
         )
+    ab = addressbook_path.strip()
+    if ab:
+        ab_path = Path(ab).expanduser()
+        if not ab_path.exists():
+            return templates.TemplateResponse(
+                "setup.html",
+                {
+                    "request": request,
+                    "current": data_dir,
+                    "ab_current": addressbook_path,
+                    "error": f"AddressBook not found at {ab_path}",
+                },
+                status_code=400,
+            )
+        config.set_addressbook_path(str(ab_path))
+    else:
+        config.set_addressbook_path(None)
     config.set_data_dir(str(path))
     cache.invalidate_cache()
     db.clear_decoder_cache()
+    db.clear_contacts_cache()
     try:
         cache.refresh_chat_db_cache()
     except Exception as exc:
@@ -131,6 +160,11 @@ def api_chat_messages(
     _: None = Depends(auth_dep),
 ) -> list[dict]:
     return db.get_chat_messages(chat_id, limit=limit, offset=offset)
+
+
+@app.get("/api/chats/{chat_id}/attachments")
+def api_chat_attachments(chat_id: int, _: None = Depends(auth_dep)) -> list[dict]:
+    return db.get_chat_attachments(chat_id)
 
 
 @app.get("/api/cache/status")

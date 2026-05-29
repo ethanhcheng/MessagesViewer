@@ -2,7 +2,6 @@ const state = {
   chats: [],
   selectedChatId: null,
   searchTimer: null,
-  filterAttachments: false,
 };
 
 const els = {
@@ -11,7 +10,7 @@ const els = {
   threadTitle: document.getElementById("thread-title"),
   threadSubtitle: document.getElementById("thread-subtitle"),
   search: document.getElementById("search"),
-  filterAttachments: document.getElementById("filter-with-attachments"),
+  mediaToggle: document.getElementById("media-toggle"),
 };
 
 async function api(path) {
@@ -108,7 +107,7 @@ function attachmentHtml(att) {
 }
 
 function bubbleHtml(msg) {
-  const sender = msg.is_from_me ? "" : (msg.sender_id || "");
+  const sender = msg.is_from_me ? "" : (msg.sender_name || msg.sender_id || "");
   const senderHtml = sender ? `<span class="sender">${escapeHtml(sender)}</span>` : "";
   const text = msg.text ? escapeHtml(msg.text) : (msg.attachment_count ? "" : "<em class='muted'>(no text)</em>");
   let atts = "";
@@ -128,6 +127,8 @@ function bubbleHtml(msg) {
 
 async function selectChat(chatId) {
   state.selectedChatId = chatId;
+  galleryOpen = false;
+  if (els.mediaToggle) els.mediaToggle.classList.remove("active");
   document.querySelectorAll(".chat-item").forEach((el) => {
     el.classList.toggle("selected", Number(el.dataset.chatId) === chatId);
   });
@@ -139,9 +140,7 @@ async function selectChat(chatId) {
   els.thread.innerHTML = `<div class="empty-state">Loading…</div>`;
   let messages = await api(`/api/chats/${chatId}/messages?limit=2000`);
   if (!messages) return;
-  if (state.filterAttachments) {
-    messages = messages.filter((m) => m.attachment_count > 0);
-  }
+  els.mediaToggle.disabled = false;
   renderMessages(messages);
 }
 
@@ -204,9 +203,28 @@ els.search.addEventListener("input", (e) => {
   state.searchTimer = setTimeout(() => runSearch(query), 250);
 });
 
-els.filterAttachments.addEventListener("change", (e) => {
-  state.filterAttachments = e.target.checked;
-  if (state.selectedChatId) selectChat(state.selectedChatId);
+let galleryOpen = false;
+
+async function openGallery() {
+  if (!state.selectedChatId) return;
+  const atts = await api(`/api/chats/${state.selectedChatId}/attachments`);
+  if (!atts) return;
+  if (!atts.length) {
+    els.thread.innerHTML = `<div class="empty-state">No media in this conversation</div>`;
+    return;
+  }
+  const cells = atts.map((a) => `<div class="gallery-cell">${attachmentHtml(a)}</div>`).join("");
+  els.thread.innerHTML = `<div class="media-gallery">${cells}</div>`;
+}
+
+els.mediaToggle.addEventListener("click", () => {
+  galleryOpen = !galleryOpen;
+  els.mediaToggle.classList.toggle("active", galleryOpen);
+  if (galleryOpen) {
+    openGallery();
+  } else if (state.selectedChatId) {
+    selectChat(state.selectedChatId);
+  }
 });
 
 const refreshBtn = document.getElementById("refresh-cache");
