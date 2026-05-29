@@ -107,7 +107,7 @@ function attachmentHtml(att) {
 }
 
 function bubbleHtml(msg) {
-  const sender = msg.is_from_me ? "" : (msg.sender_id || "");
+  const sender = msg.is_from_me ? "" : (msg.sender_name || msg.sender_id || "");
   const senderHtml = sender ? `<span class="sender">${escapeHtml(sender)}</span>` : "";
   const text = msg.text ? escapeHtml(msg.text) : (msg.attachment_count ? "" : "<em class='muted'>(no text)</em>");
   let atts = "";
