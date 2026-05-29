@@ -32,6 +32,19 @@ def test_get_chat_messages_full_thread_is_chronological(chat_db):
     ]
 
 
+def test_get_chat_messages_paginates_older_batches(chat_db):
+    # Progressive loading: offset counts back from the newest. Each batch is
+    # ordered oldest->newest within itself, and batches don't overlap.
+    newest = db.get_chat_messages(chat_id=1, limit=2, offset=0)
+    assert [m["text"] for m in newest] == ["message 4", "message 5"]
+    older = db.get_chat_messages(chat_id=1, limit=2, offset=2)
+    assert [m["text"] for m in older] == ["message 2", "message 3"]
+    oldest = db.get_chat_messages(chat_id=1, limit=2, offset=4)
+    assert [m["text"] for m in oldest] == ["message 1"]
+    # Past the end -> empty, signalling "all loaded".
+    assert db.get_chat_messages(chat_id=1, limit=2, offset=6) == []
+
+
 def test_get_chat_attachments_returns_conversation_media(chat_db):
     atts = db.get_chat_attachments(chat_id=1)
     assert len(atts) == 1

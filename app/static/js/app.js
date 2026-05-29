@@ -1,7 +1,13 @@
+const MESSAGE_BATCH = 300;
+let galleryOpen = false;
+
 const state = {
   chats: [],
   selectedChatId: null,
   searchTimer: null,
+  messages: [],        // loaded messages, oldest -> newest
+  loadingOlder: false, // a "load older" fetch is in flight
+  allLoaded: false,    // no older messages remain
 };
 
 const els = {
@@ -137,18 +143,20 @@ async function selectChat(chatId) {
   els.threadSubtitle.textContent = chat
     ? `${chat.message_count} message${chat.message_count === 1 ? "" : "s"} · ${chat.participants.join(", ")}`
     : "";
+  state.messages = [];
+  state.loadingOlder = false;
+  state.allLoaded = false;
   els.thread.innerHTML = `<div class="empty-state">Loading…</div>`;
-  let messages = await api(`/api/chats/${chatId}/messages?limit=2000`);
-  if (!messages) return;
+  const first = await api(`/api/chats/${chatId}/messages?limit=${MESSAGE_BATCH}&offset=0`);
+  if (!first || chatId !== state.selectedChatId) return;
   els.mediaToggle.disabled = false;
-  renderMessages(messages);
+  state.messages = first;
+  if (first.length < MESSAGE_BATCH) state.allLoaded = true;
+  renderThread();
+  els.thread.scrollTop = els.thread.scrollHeight;
 }
 
-function renderMessages(messages) {
-  if (!messages.length) {
-    els.thread.innerHTML = `<div class="empty-state">No messages</div>`;
-    return;
-  }
+function buildThreadHtml(messages) {
   const parts = [];
   let lastDay = null;
   for (const msg of messages) {
@@ -159,9 +167,42 @@ function renderMessages(messages) {
     }
     parts.push(bubbleHtml(msg));
   }
-  els.thread.innerHTML = parts.join("");
-  els.thread.scrollTop = els.thread.scrollHeight;
+  return parts.join("");
 }
+
+function renderThread() {
+  if (!state.messages.length) {
+    els.thread.innerHTML = `<div class="empty-state">No messages</div>`;
+    return;
+  }
+  els.thread.innerHTML = buildThreadHtml(state.messages);
+}
+
+async function loadOlderMessages() {
+  if (state.loadingOlder || state.allLoaded || galleryOpen || !state.selectedChatId) return;
+  state.loadingOlder = true;
+  const chatId = state.selectedChatId;
+  const offset = state.messages.length;
+  const older = await api(`/api/chats/${chatId}/messages?limit=${MESSAGE_BATCH}&offset=${offset}`);
+  // Bail if the user switched chats while this was in flight.
+  if (!older || chatId !== state.selectedChatId) {
+    state.loadingOlder = false;
+    return;
+  }
+  if (older.length) {
+    const prevHeight = els.thread.scrollHeight;
+    state.messages = older.concat(state.messages);
+    renderThread();
+    // Preserve the scroll position so the view doesn't jump when prepending.
+    els.thread.scrollTop = els.thread.scrollHeight - prevHeight;
+  }
+  if (older.length < MESSAGE_BATCH) state.allLoaded = true;
+  state.loadingOlder = false;
+}
+
+els.thread.addEventListener("scroll", () => {
+  if (els.thread.scrollTop < 120) loadOlderMessages();
+});
 
 async function runSearch(query) {
   if (!query.trim()) {
@@ -202,8 +243,6 @@ els.search.addEventListener("input", (e) => {
   const query = e.target.value;
   state.searchTimer = setTimeout(() => runSearch(query), 250);
 });
-
-let galleryOpen = false;
 
 async function openGallery() {
   if (!state.selectedChatId) return;
