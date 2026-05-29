@@ -133,6 +133,11 @@ def api_chat_messages(
     return db.get_chat_messages(chat_id, limit=limit, offset=offset)
 
 
+@app.get("/api/chats/{chat_id}/attachments")
+def api_chat_attachments(chat_id: int, _: None = Depends(auth_dep)) -> list[dict]:
+    return db.get_chat_attachments(chat_id)
+
+
 @app.get("/api/cache/status")
 def api_cache_status(_: None = Depends(auth_dep)) -> dict:
     return asdict(cache.cache_status())

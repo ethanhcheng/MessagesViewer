@@ -30,3 +30,12 @@ def test_get_chat_messages_full_thread_is_chronological(chat_db):
     assert [m["text"] for m in msgs] == [
         "message 1", "message 2", "message 3", "message 4", "message 5",
     ]
+
+
+def test_get_chat_attachments_returns_conversation_media(chat_db):
+    atts = db.get_chat_attachments(chat_id=1)
+    assert len(atts) == 1
+    a = atts[0]
+    assert a["mime_type"] == "image/jpeg"
+    assert a["transfer_name"] == "x.jpg"
+    assert a["date"] is not None

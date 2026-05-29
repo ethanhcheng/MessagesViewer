@@ -229,6 +229,33 @@ def get_chat_messages(chat_id: int, limit: int = 1000, offset: int = 0) -> list[
     return results
 
 
+def get_chat_attachments(chat_id: int) -> list[dict]:
+    """All attachments in a conversation, newest first — for the media gallery."""
+    sql = """
+        SELECT a.ROWID AS attachment_id, a.filename, a.mime_type,
+               a.transfer_name, a.total_bytes, m.date
+        FROM chat_message_join cmj
+        JOIN message m ON m.ROWID = cmj.message_id
+        JOIN message_attachment_join maj ON maj.message_id = m.ROWID
+        JOIN attachment a ON a.ROWID = maj.attachment_id
+        WHERE cmj.chat_id = ?
+        ORDER BY m.date DESC
+    """
+    with get_conn() as conn:
+        rows = conn.execute(sql, (chat_id,)).fetchall()
+    return [
+        {
+            "attachment_id": r["attachment_id"],
+            "filename": r["filename"],
+            "mime_type": r["mime_type"],
+            "transfer_name": r["transfer_name"],
+            "total_bytes": r["total_bytes"],
+            "date": apple_ts_to_unix(r["date"]),
+        }
+        for r in rows
+    ]
+
+
 def _attachments_for(conn: sqlite3.Connection, message_ids: list[int]) -> dict[int, list[dict]]:
     if not message_ids:
         return {}
