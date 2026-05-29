@@ -10,6 +10,7 @@ DEFAULT_CACHE_DIR = "/var/lib/messagesviewer/cache"
 class Config:
     def __init__(self) -> None:
         self.data_dir: Optional[str] = None
+        self.addressbook_path: Optional[str] = None
         self.cache_dir: str = os.environ.get("MV_CACHE_DIR", DEFAULT_CACHE_DIR)
         self.load()
 
@@ -17,12 +18,22 @@ class Config:
         if CONFIG_PATH.exists():
             data = json.loads(CONFIG_PATH.read_text())
             self.data_dir = data.get("data_dir")
+            self.addressbook_path = data.get("addressbook_path")
 
     def save(self) -> None:
-        CONFIG_PATH.write_text(json.dumps({"data_dir": self.data_dir}, indent=2))
+        CONFIG_PATH.write_text(
+            json.dumps(
+                {"data_dir": self.data_dir, "addressbook_path": self.addressbook_path},
+                indent=2,
+            )
+        )
 
     def set_data_dir(self, path: str) -> None:
         self.data_dir = path
+        self.save()
+
+    def set_addressbook_path(self, path: Optional[str]) -> None:
+        self.addressbook_path = path
         self.save()
 
     @property
