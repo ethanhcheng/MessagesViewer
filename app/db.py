@@ -4,10 +4,26 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Iterator, Optional
 
-from . import cache
+from . import cache, contacts
 from .config import config
 
 APPLE_EPOCH_OFFSET = 978307200  # Seconds between Unix epoch and 2001-01-01
+
+_contacts_cache: Optional[dict[str, str]] = None
+
+
+def _get_contacts() -> dict[str, str]:
+    global _contacts_cache
+    if _contacts_cache is None:
+        path = config.addressbook_path
+        _contacts_cache = contacts.load_contacts(Path(path)) if path else {}
+    return _contacts_cache
+
+
+def clear_contacts_cache() -> None:
+    """Call after the configured AddressBook path changes."""
+    global _contacts_cache
+    _contacts_cache = None
 
 
 @contextmanager
@@ -173,18 +189,21 @@ def list_chats(limit: int = 500) -> list[dict]:
     """
     with get_conn() as conn:
         rows = conn.execute(sql, (limit,)).fetchall()
-    return [
-        {
+    cmap = _get_contacts()
+    out = []
+    for r in rows:
+        participants = (r["participants"] or "").split(",") if r["participants"] else []
+        names = [contacts.resolve(p, cmap) for p in participants]
+        out.append({
             "chat_id": r["chat_id"],
             "guid": r["guid"],
-            "display_name": r["display_name"] or r["chat_identifier"],
+            "display_name": r["display_name"] or ", ".join(names) or r["chat_identifier"],
             "chat_identifier": r["chat_identifier"],
-            "participants": (r["participants"] or "").split(",") if r["participants"] else [],
+            "participants": names,
             "last_date": apple_ts_to_unix(r["last_date"]),
             "message_count": r["message_count"],
-        }
-        for r in rows
-    ]
+        })
+    return out
 
 
 def get_chat_messages(chat_id: int, limit: int = 1000, offset: int = 0) -> list[dict]:
@@ -211,6 +230,7 @@ def get_chat_messages(chat_id: int, limit: int = 1000, offset: int = 0) -> list[
         message_ids = [r["message_id"] for r in rows]
         attachments_by_msg = _attachments_for(conn, message_ids)
 
+    cmap = _get_contacts()
     results = []
     for r in rows:
         text = r["text"] or decode_attributed_body(r["attributedBody"])
@@ -223,6 +243,7 @@ def get_chat_messages(chat_id: int, limit: int = 1000, offset: int = 0) -> list[
             "is_from_me": bool(r["is_from_me"]),
             "service": r["service"],
             "sender_id": r["sender_id"],
+            "sender_name": contacts.resolve(r["sender_id"], cmap),
             "attachment_count": len(atts),
             "attachments": atts,
         })

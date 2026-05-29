@@ -39,3 +39,12 @@ def test_get_chat_attachments_returns_conversation_media(chat_db):
     assert a["mime_type"] == "image/jpeg"
     assert a["transfer_name"] == "x.jpg"
     assert a["date"] is not None
+
+
+def test_messages_resolve_sender_name(chat_db, addressbook, monkeypatch):
+    from app.config import config
+    monkeypatch.setattr(config, "addressbook_path", str(addressbook))
+    db.clear_contacts_cache()
+    msgs = db.get_chat_messages(chat_id=1, limit=100, offset=0)
+    # handle +15551234567 -> normalized 5551234567 -> "Jane Doe"
+    assert msgs[0]["sender_name"] == "Jane Doe"
