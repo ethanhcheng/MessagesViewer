@@ -22,6 +22,14 @@
         value="{{ current or '' }}"
         required
       />
+      <label for="addressbook_path">AddressBook database (optional)</label>
+      <input
+        id="addressbook_path"
+        name="addressbook_path"
+        type="text"
+        placeholder="/mnt/nas/messages-backup/AddressBook-v22.abcddb"
+        value="{{ ab_current or '' }}"
+      />
       {% if error %}<p class="error">{{ error }}</p>{% endif %}
       <div class="row">
         <button type="submit">Save and continue</button>
